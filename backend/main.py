@@ -10,8 +10,9 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.config import load_settings
 from backend.candles import CandleBuilder, resample
+from backend.indicators import ema, session_vwap
 from backend.signals import SignalEngine
-from backend.storage import init_db, insert_signal
+from backend.storage import init_db, insert_signal, get_recent_signals
 from backend.dhan_client import DhanClient, NIFTY_INDEX_SECURITY_ID, NIFTY_INDEX_EXCHANGE_SEGMENT
 from dhanhq import marketfeed
 
@@ -168,10 +169,26 @@ def _candle_to_json(c) -> dict:
     }
 
 
+def _indicator_series(tf: str) -> dict:
+    """Full indicator series for history frames: lists aligned with candles (None where warm-up)."""
+    candles = builders[tf].candles
+    closes = [c.close for c in candles]
+    return {
+        "ema_fast": ema(closes, settings.fast_ema_period),
+        "ema_slow": ema(closes, settings.slow_ema_period),
+        "vwap": session_vwap(candles) if candles else [],
+    }
+
+
 @app.get("/status")
 async def status() -> dict:
     last = _last_tick_at["value"]
     return {"last_tick_at": last.isoformat() if last else None}
+
+
+@app.get("/signals")
+async def recent_signals() -> list[dict]:
+    return get_recent_signals(db_conn)
 
 
 @app.websocket("/ws")
@@ -184,6 +201,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
                 "type": "history",
                 "timeframe": tf,
                 "candles": [_candle_to_json(c) for c in builders[tf].candles],
+                "indicators": _indicator_series(tf),
             }))
         while True:
             await websocket.receive_text()
@@ -228,10 +246,16 @@ def on_index_tick(timestamp: datetime, price: float, futures_price: float, volum
     for tf in TIMEFRAMES:
         closed = builders[tf].add_tick(timestamp, price, volume)
         live = builders[tf].candles[-1]
+        series = _indicator_series(tf)
         _schedule_broadcast({
             "type": "candle",
             "timeframe": tf,
             "candle": _candle_to_json(live),
+            "indicators": {
+                "ema_fast": series["ema_fast"][-1],
+                "ema_slow": series["ema_slow"][-1],
+                "vwap": series["vwap"][-1],
+            },
         })
         if closed:
             signal = engines[tf].evaluate(builders[tf].candles, futures_price)

@@ -36,6 +36,19 @@ def test_session_vwap_resets_each_day():
     assert result[2] == (210 + 190 + 200) / 3
 
 
+def test_session_vwap_falls_back_to_cumulative_typical_average_when_no_volume():
+    day = datetime(2026, 7, 1, 9, 15)
+    candles = [
+        make_candle(day, 100, 110, 90, 100, v=0),
+        make_candle(day + timedelta(minutes=1), 100, 130, 110, 120, v=0),
+    ]
+    result = session_vwap(candles)
+    typical_1 = (110 + 90 + 100) / 3
+    typical_2 = (130 + 110 + 120) / 3
+    assert result[0] == typical_1
+    assert result[1] == (typical_1 + typical_2) / 2  # cumulative average, not per-candle
+
+
 def test_atr_returns_none_until_period_plus_one_candles():
     candles = [make_candle(datetime(2026, 7, 1) + timedelta(minutes=i), 100, 105, 95, 100) for i in range(10)]
     result = atr(candles, period=14)

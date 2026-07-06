@@ -18,9 +18,16 @@ def ema(values: list[float], period: int) -> list[float | None]:
 
 
 def session_vwap(candles: list[Candle]) -> list[float]:
+    """Session-anchored VWAP, reset on each new day.
+
+    When cumulative session volume is zero (e.g. live index ticks carry no
+    volume), falls back to the cumulative average of typical prices for the
+    session so far (an equal-weighted session VWAP)."""
     result: list[float] = []
     cum_pv = 0.0
     cum_vol = 0.0
+    cum_typical = 0.0
+    count = 0
     current_day: date | None = None
     for c in candles:
         day = c.timestamp.date()
@@ -28,10 +35,17 @@ def session_vwap(candles: list[Candle]) -> list[float]:
             current_day = day
             cum_pv = 0.0
             cum_vol = 0.0
+            cum_typical = 0.0
+            count = 0
         typical = (c.high + c.low + c.close) / 3
         cum_pv += typical * c.volume
         cum_vol += c.volume
-        result.append(cum_pv / cum_vol if cum_vol else typical)
+        cum_typical += typical
+        count += 1
+        if cum_vol:
+            result.append(cum_pv / cum_vol)
+        else:
+            result.append(cum_typical / count)
     return result
 
 
