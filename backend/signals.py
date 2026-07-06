@@ -7,9 +7,23 @@ ATR_PERIOD = 14
 ATR_MULTIPLIER = 1.5
 SWING_LOOKBACK = 10
 RISK_REWARD = 3.0
+# Minimum acceptable distance between entry and stop-loss. Below this, the
+# stop-loss is effectively equal to entry (e.g. ATR == 0 on flat candles),
+# which would produce a zero-risk-distance signal. One paisa/index-point —
+# small enough to never reject a real signal, large enough to absorb float
+# precision noise.
+MIN_SL_DISTANCE = 0.01
 
 
 class SignalEngine:
+    """Generates BUY/SELL trade signals from an EMA crossover strategy.
+
+    Combines a fast/slow EMA crossover, a session-VWAP directional filter,
+    and a no-repeat guard (won't re-fire in the same direction until the
+    crossover reverses) with a configurable stop-loss method ("atr" or
+    "swing") and a fixed risk-reward multiple for the target.
+    """
+
     def __init__(self, timeframe: str, sl_method: str = "atr"):
         if sl_method not in ("atr", "swing"):
             raise ValueError(f"Unsupported sl_method: {sl_method}")
@@ -18,6 +32,22 @@ class SignalEngine:
         self._last_cross_direction: str | None = None
 
     def evaluate(self, index_candles: list[Candle], futures_price: float) -> Signal | None:
+        """Evaluate the latest candle for a new trade signal.
+
+        Must be called once per newly-closed candle, in chronological order,
+        passing the full accumulated candle history each time (not per-tick,
+        and not with only the latest candle). Indicators such as EMA, VWAP,
+        and ATR are recomputed over the whole series on every call and rely
+        on that full, in-order history to be correct.
+
+        Returns `None` if there is no actionable signal on this bar. `None`
+        is intentionally ambiguous — it can mean: insufficient EMA history,
+        no crossover on this bar, a crossover that was filtered out by the
+        VWAP condition or the no-repeat guard, or a crossover whose stop-loss
+        /target could not be computed (e.g. missing swing data or a
+        negligible stop-loss distance). Callers should not try to distinguish
+        between these cases; treat `None` uniformly as "no signal this bar."
+        """
         closes = [c.close for c in index_candles]
         fast = ema(closes, FAST_EMA_PERIOD)
         slow = ema(closes, SLOW_EMA_PERIOD)
@@ -50,6 +80,9 @@ class SignalEngine:
             return None
 
         sl_distance = abs(close - stop_loss)
+        if sl_distance < MIN_SL_DISTANCE:
+            return None
+
         target = close + sl_distance * RISK_REWARD if direction == "BUY" else close - sl_distance * RISK_REWARD
 
         return Signal(
@@ -69,8 +102,8 @@ class SignalEngine:
             if atr_value is None:
                 return None
             return entry - atr_value * ATR_MULTIPLIER if direction == "BUY" else entry + atr_value * ATR_MULTIPLIER
-        low = swing_low(candles, SWING_LOOKBACK)
+        if direction == "BUY":
+            low = swing_low(candles, SWING_LOOKBACK)
+            return low
         high = swing_high(candles, SWING_LOOKBACK)
-        if low is None or high is None:
-            return None
-        return low if direction == "BUY" else high
+        return high

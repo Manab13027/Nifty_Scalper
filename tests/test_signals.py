@@ -42,6 +42,31 @@ def test_signal_does_not_repeat_until_cross_reverses():
     assert len(fired) == 1
 
 
+def test_rejects_signal_with_zero_atr_stop_loss_distance():
+    engine = SignalEngine("1m", sl_method="atr")
+    # Flat candles (high == low == close) hold ATR at 0 while completely flat.
+    # A large jump (e.g. 100 -> 200) would cross the EMAs *and* immediately
+    # push true-range (and therefore ATR) up on that same bar, since ATR
+    # includes the current bar's true range in its rolling average — so a
+    # sharp jump doesn't actually reach the zero-SL-distance path. A tiny
+    # jump, however, still triggers an EMA crossover (any close change does)
+    # while keeping ATR-derived SL distance far below MIN_SL_DISTANCE, which
+    # is exactly the "effectively zero risk distance" case this guard exists
+    # for. Confirmed against the pre-fix code: this fixture produced a real
+    # Signal with stop_loss ~= entry (sl_distance ~= 0.0011).
+    start = datetime(2026, 7, 1, 9, 15)
+    flat_closes = [100] * 25
+    candles = [Candle(start + timedelta(minutes=i), c, c, c, c, 100) for i, c in enumerate(flat_closes)]
+    tiny_jump = [100.001, 100.002, 100.003]
+    candles += [Candle(start + timedelta(minutes=25 + j), c, c, c, c, 100) for j, c in enumerate(tiny_jump)]
+    signal = None
+    for i in range(22, len(candles) + 1):
+        signal = engine.evaluate(candles[:i], futures_price=candles[i - 1].close)
+        if signal:
+            break
+    assert signal is None
+
+
 def test_swing_sl_method_places_stop_at_recent_swing_low():
     engine = SignalEngine("1m", sl_method="swing")
     closes = [110 - i for i in range(25)] + [200, 210, 220]
