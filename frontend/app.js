@@ -90,16 +90,23 @@ ws.onmessage = (event) => {
   }
 };
 
+const STALE_THRESHOLD_SECONDS = 60;
+const STATUS_POLL_INTERVAL_MS = 5000;
+
 async function pollStatus() {
-  const res = await fetch("/status");
-  const { last_tick_at } = await res.json();
   const el = document.getElementById("status-indicator");
-  if (!last_tick_at) {
-    el.textContent = "no data yet";
-    return;
+  try {
+    const res = await fetch("/status");
+    const { last_tick_at } = await res.json();
+    if (!last_tick_at) {
+      el.textContent = "no data yet";
+      return;
+    }
+    const secondsAgo = (Date.now() - new Date(last_tick_at).getTime()) / 1000;
+    el.textContent = secondsAgo > STALE_THRESHOLD_SECONDS ? `stale (${Math.floor(secondsAgo)}s ago)` : "live";
+  } catch {
+    el.textContent = "disconnected";
   }
-  const secondsAgo = (Date.now() - new Date(last_tick_at).getTime()) / 1000;
-  el.textContent = secondsAgo > 60 ? `stale (${Math.floor(secondsAgo)}s ago)` : "live";
 }
-setInterval(pollStatus, 5000);
+setInterval(pollStatus, STATUS_POLL_INTERVAL_MS);
 pollStatus();

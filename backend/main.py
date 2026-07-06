@@ -28,7 +28,8 @@ connected_clients: list[WebSocket] = []
 _event_loop: asyncio.AbstractEventLoop | None = None
 _live_feed_task: asyncio.Task | None = None
 
-_latest_futures_price = {"value": 0.0}
+FUTURES_PRICE_MAX_AGE_SECONDS = 10
+_latest_futures_price = {"value": 0.0, "at": None}
 _last_tick_at: dict[str, datetime | None] = {"value": None}
 
 RECONNECT_BACKOFF_SECONDS = [1, 2, 5, 10, 30]
@@ -70,8 +71,15 @@ def _handle_feed_message(message: object) -> None:
     _last_tick_at["value"] = now
     if str(security_id) == settings.nifty_fut_security_id:
         _latest_futures_price["value"] = price
+        _latest_futures_price["at"] = now
     elif str(security_id) == NIFTY_INDEX_SECURITY_ID:
-        on_index_tick(now, price, _latest_futures_price["value"] or price)
+        fut = _latest_futures_price
+        fut_is_fresh = (
+            fut["at"] is not None
+            and (now - fut["at"]).total_seconds() <= FUTURES_PRICE_MAX_AGE_SECONDS
+        )
+        futures_price = fut["value"] if fut_is_fresh else price
+        on_index_tick(now, price, futures_price)
 
 
 async def run_live_feed() -> None:
