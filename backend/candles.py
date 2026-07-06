@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timedelta
 from backend.models import Candle
 
@@ -19,6 +20,8 @@ class CandleBuilder:
         self._current_bucket_start: datetime | None = None
 
     def _bucket_start(self, ts: datetime) -> datetime:
+        # Bucketed relative to midnight of the calendar day (not unix epoch),
+        # so market-open-aligned boundaries (9:15, 9:30, 9:45 IST) land exactly.
         midnight = ts.replace(hour=0, minute=0, second=0, microsecond=0)
         if self.timeframe == "day":
             return midnight
@@ -27,25 +30,32 @@ class CandleBuilder:
         return midnight + timedelta(seconds=offset)
 
     def add_tick(self, timestamp: datetime, price: float, volume: float = 0.0) -> Candle | None:
+        return self._merge(timestamp, price, price, price, price, volume)
+
+    def merge_candle(self, candle: Candle) -> Candle | None:
+        """Merge a fully-formed OHLCV candle (e.g. from resample) into this builder."""
+        return self._merge(candle.timestamp, candle.open, candle.high, candle.low, candle.close, candle.volume)
+
+    def _merge(self, timestamp: datetime, o: float, h: float, l: float, c: float, v: float) -> Candle | None:
         bucket_start = self._bucket_start(timestamp)
         closed: Candle | None = None
         if self._current_bucket_start is None:
             self._current_bucket_start = bucket_start
-            self.candles.append(Candle(bucket_start, price, price, price, price, volume))
+            self.candles.append(Candle(bucket_start, o, h, l, c, v))
         elif bucket_start != self._current_bucket_start:
             closed = self.candles[-1]
             self._current_bucket_start = bucket_start
-            self.candles.append(Candle(bucket_start, price, price, price, price, volume))
+            self.candles.append(Candle(bucket_start, o, h, l, c, v))
         else:
             live = self.candles[-1]
-            live.high = max(live.high, price)
-            live.low = min(live.low, price)
-            live.close = price
-            live.volume += volume
+            live.high = max(live.high, h)
+            live.low = min(live.low, l)
+            live.close = c
+            live.volume += v
         return closed
 
     def seed(self, candles: list[Candle]) -> None:
-        self.candles = list(candles)
+        self.candles = [replace(c) for c in candles]
         if self.candles:
             self._current_bucket_start = self._bucket_start(self.candles[-1].timestamp)
 
@@ -55,18 +65,9 @@ def resample(candles: list[Candle], timeframe: str) -> list[Candle]:
     builder = CandleBuilder(timeframe)
     result: list[Candle] = []
     for c in candles:
-        bucket_start = builder._bucket_start(c.timestamp)
-        if builder._current_bucket_start is None or bucket_start != builder._current_bucket_start:
-            if builder.candles:
-                result.append(builder.candles[-1])
-            builder._current_bucket_start = bucket_start
-            builder.candles.append(Candle(bucket_start, c.open, c.high, c.low, c.close, c.volume))
-        else:
-            live = builder.candles[-1]
-            live.high = max(live.high, c.high)
-            live.low = min(live.low, c.low)
-            live.close = c.close
-            live.volume += c.volume
+        closed = builder.merge_candle(c)
+        if closed:
+            result.append(closed)
     if builder.candles:
         result.append(builder.candles[-1])
     return result

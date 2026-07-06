@@ -53,3 +53,34 @@ def test_resample_aggregates_1m_candles_into_15m_bucket():
     assert first.low == 98
     assert first.close == 105
     assert first.volume == 30
+
+
+def test_seed_does_not_alias_caller_candles():
+    original = [Candle(datetime(2026, 7, 1, 9, 15), 100, 101, 99, 100, 50)]
+    builder = CandleBuilder("1m")
+    builder.seed(original)
+    builder.add_tick(datetime(2026, 7, 1, 9, 15, 30), 200.0, 10)
+    assert original[0].high == 101  # caller's original candle must be untouched
+    assert builder.candles[0].high == 200.0  # builder's own copy was updated
+
+
+def test_candle_builder_raises_on_unsupported_timeframe():
+    import pytest
+    with pytest.raises(ValueError):
+        CandleBuilder("5m")
+
+
+def test_day_timeframe_buckets_at_midnight():
+    builder = CandleBuilder("day")
+    builder.add_tick(datetime(2026, 7, 1, 9, 15), 100.0, 10)
+    closed = builder.add_tick(datetime(2026, 7, 2, 9, 15), 110.0, 10)
+    assert closed is not None
+    assert len(builder.candles) == 2
+
+
+def test_tick_exactly_on_bucket_boundary_starts_new_bucket():
+    builder = CandleBuilder("15m")
+    builder.add_tick(datetime(2026, 7, 1, 9, 15, 0), 100.0, 10)
+    closed = builder.add_tick(datetime(2026, 7, 1, 9, 30, 0), 110.0, 10)
+    assert closed is not None
+    assert closed.close == 100.0
