@@ -21,6 +21,8 @@ class DhanClient:
             from_date=from_date,
             to_date=to_date,
         )
+        if response.get("status") == "failure":
+            raise RuntimeError(f"Dhan API error: {response.get('remarks')}")
         data = response.get("data", response)
         candles = []
         for i in range(len(data["open"])):

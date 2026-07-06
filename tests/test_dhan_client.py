@@ -1,3 +1,4 @@
+import pytest
 from unittest.mock import MagicMock
 from backend.dhan_client import DhanClient
 
@@ -23,3 +24,14 @@ def test_fetch_intraday_candles_parses_response(monkeypatch):
     assert len(candles) == 2
     assert candles[0].open == 100.0
     assert candles[1].close == 102.0
+
+
+def test_fetch_intraday_candles_raises_on_api_failure(monkeypatch):
+    fake_response = {"status": "failure", "remarks": "Invalid access token", "data": ""}
+    mock_sdk = MagicMock()
+    mock_sdk.intraday_minute_data.return_value = fake_response
+    monkeypatch.setattr("backend.dhan_client.dhanhq", lambda *a, **k: mock_sdk)
+
+    client = DhanClient("client_id", "access_token")
+    with pytest.raises(RuntimeError, match="Invalid access token"):
+        client.fetch_intraday_candles("13", "IDX_I", "INDEX", "2026-07-01", "2026-07-01")
