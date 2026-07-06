@@ -1,0 +1,60 @@
+from datetime import datetime, timedelta
+from backend.models import Candle
+from backend.indicators import ema, session_vwap, atr, swing_low, swing_high
+
+
+def make_candle(ts, o, h, l, c, v=100):
+    return Candle(timestamp=ts, open=o, high=h, low=l, close=c, volume=v)
+
+
+def test_ema_returns_none_until_period_reached():
+    result = ema([1, 2, 3], period=5)
+    assert result == [None, None, None]
+
+
+def test_ema_seeds_with_sma_then_applies_multiplier():
+    values = [1, 2, 3, 4, 5, 6]
+    result = ema(values, period=3)
+    assert result[0] is None
+    assert result[1] is None
+    assert result[2] == 2.0
+    multiplier = 2 / 4
+    expected_4 = (4 - 2.0) * multiplier + 2.0
+    assert round(result[3], 4) == round(expected_4, 4)
+
+
+def test_session_vwap_resets_each_day():
+    day1 = datetime(2026, 7, 1, 9, 15)
+    day2 = datetime(2026, 7, 2, 9, 15)
+    candles = [
+        make_candle(day1, 100, 110, 90, 100, v=10),
+        make_candle(day1 + timedelta(minutes=1), 100, 120, 100, 110, v=10),
+        make_candle(day2, 200, 210, 190, 200, v=10),
+    ]
+    result = session_vwap(candles)
+    assert result[0] == (110 + 90 + 100) / 3
+    assert result[2] == (210 + 190 + 200) / 3
+
+
+def test_atr_returns_none_until_period_plus_one_candles():
+    candles = [make_candle(datetime(2026, 7, 1) + timedelta(minutes=i), 100, 105, 95, 100) for i in range(10)]
+    result = atr(candles, period=14)
+    assert result == [None] * 10
+
+
+def test_atr_computes_seed_after_enough_candles():
+    candles = [make_candle(datetime(2026, 7, 1) + timedelta(minutes=i), 100, 105, 95, 100) for i in range(16)]
+    result = atr(candles, period=14)
+    assert result[14] is not None
+    assert result[14] == 10.0
+
+
+def test_swing_low_and_high_use_lookback_window():
+    candles = [make_candle(datetime(2026, 7, 1) + timedelta(minutes=i), 100, 100 + i, 100 - i, 100) for i in range(12)]
+    assert swing_low(candles, lookback=10) == 100 - 11
+    assert swing_high(candles, lookback=10) == 100 + 11
+
+
+def test_swing_low_returns_none_if_not_enough_candles():
+    candles = [make_candle(datetime(2026, 7, 1), 100, 105, 95, 100)]
+    assert swing_low(candles, lookback=10) is None
