@@ -49,6 +49,29 @@ def test_atr_computes_seed_after_enough_candles():
     assert result[14] == 10.0
 
 
+def test_atr_applies_wilder_recurrence_after_seed():
+    base = datetime(2026, 7, 1)
+    # 14 candles with TR=10 each (seed), then one more candle with a much larger range
+    # so the recurrence step produces a value distinguishable from both the seed
+    # and from the new candle's raw TR.
+    candles = [make_candle(base + timedelta(minutes=i), 100, 105, 95, 100) for i in range(15)]
+    candles.append(make_candle(base + timedelta(minutes=15), 100, 140, 100, 120))
+    result = atr(candles, period=14)
+    seed = result[14]
+    assert seed == 10.0
+    tr_15 = max(140 - 100, abs(140 - 100), abs(100 - 100))  # prev_close=100 (candle 14's close)
+    expected = (seed * 13 + tr_15) / 14
+    assert result[15] == expected
+    assert result[15] != seed
+    assert result[15] != tr_15
+
+
+def test_ema_at_exactly_period_values_returns_only_seed():
+    values = [1, 2, 3]
+    result = ema(values, period=3)
+    assert result == [None, None, 2.0]
+
+
 def test_swing_low_and_high_use_lookback_window():
     candles = [make_candle(datetime(2026, 7, 1) + timedelta(minutes=i), 100, 100 + i, 100 - i, 100) for i in range(12)]
     assert swing_low(candles, lookback=10) == 100 - 11
