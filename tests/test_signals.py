@@ -67,6 +67,21 @@ def test_rejects_signal_with_zero_atr_stop_loss_distance():
     assert signal is None
 
 
+def test_custom_risk_reward_changes_target():
+    engine = SignalEngine("1m", sl_method="atr", risk_reward=2.0)
+    closes = [110 - i for i in range(25)] + [200, 210, 220]
+    candles = make_series(closes)
+    signal = None
+    for i in range(22, len(candles) + 1):
+        signal = engine.evaluate(candles[:i], futures_price=candles[i - 1].close)
+        if signal:
+            break
+    assert signal is not None
+    assert signal.rr == 2.0
+    sl_distance = signal.entry_index_price - signal.stop_loss
+    assert abs(signal.target - (signal.entry_index_price + sl_distance * 2.0)) < 1e-9
+
+
 def test_swing_sl_method_places_stop_at_recent_swing_low():
     engine = SignalEngine("1m", sl_method="swing")
     closes = [110 - i for i in range(25)] + [200, 210, 220]

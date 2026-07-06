@@ -1,12 +1,8 @@
 from backend.models import Candle, Signal
 from backend.indicators import ema, session_vwap, atr, swing_low, swing_high
 
-FAST_EMA_PERIOD = 9
-SLOW_EMA_PERIOD = 21
 ATR_PERIOD = 14
-ATR_MULTIPLIER = 1.5
 SWING_LOOKBACK = 10
-RISK_REWARD = 3.0
 # Minimum acceptable distance between entry and stop-loss. Below this, the
 # stop-loss is effectively equal to entry (e.g. ATR == 0 on flat candles),
 # which would produce a zero-risk-distance signal. One paisa/index-point —
@@ -24,11 +20,23 @@ class SignalEngine:
     "swing") and a fixed risk-reward multiple for the target.
     """
 
-    def __init__(self, timeframe: str, sl_method: str = "atr"):
+    def __init__(
+        self,
+        timeframe: str,
+        sl_method: str = "atr",
+        fast_ema_period: int = 9,
+        slow_ema_period: int = 21,
+        atr_multiplier: float = 1.5,
+        risk_reward: float = 3.0,
+    ):
         if sl_method not in ("atr", "swing"):
             raise ValueError(f"Unsupported sl_method: {sl_method}")
         self.timeframe = timeframe
         self.sl_method = sl_method
+        self.fast_ema_period = fast_ema_period
+        self.slow_ema_period = slow_ema_period
+        self.atr_multiplier = atr_multiplier
+        self.risk_reward = risk_reward
         self._last_cross_direction: str | None = None
 
     def evaluate(self, index_candles: list[Candle], futures_price: float) -> Signal | None:
@@ -49,8 +57,8 @@ class SignalEngine:
         between these cases; treat `None` uniformly as "no signal this bar."
         """
         closes = [c.close for c in index_candles]
-        fast = ema(closes, FAST_EMA_PERIOD)
-        slow = ema(closes, SLOW_EMA_PERIOD)
+        fast = ema(closes, self.fast_ema_period)
+        slow = ema(closes, self.slow_ema_period)
         vwap = session_vwap(index_candles)
         atr_values = atr(index_candles, ATR_PERIOD)
 
@@ -83,7 +91,7 @@ class SignalEngine:
         if sl_distance < MIN_SL_DISTANCE:
             return None
 
-        target = close + sl_distance * RISK_REWARD if direction == "BUY" else close - sl_distance * RISK_REWARD
+        target = close + sl_distance * self.risk_reward if direction == "BUY" else close - sl_distance * self.risk_reward
 
         return Signal(
             timestamp=index_candles[-1].timestamp,
@@ -93,7 +101,7 @@ class SignalEngine:
             entry_futures_price=futures_price,
             stop_loss=stop_loss,
             target=target,
-            rr=RISK_REWARD,
+            rr=self.risk_reward,
             sl_method=self.sl_method,
         )
 
@@ -101,7 +109,7 @@ class SignalEngine:
         if self.sl_method == "atr":
             if atr_value is None:
                 return None
-            return entry - atr_value * ATR_MULTIPLIER if direction == "BUY" else entry + atr_value * ATR_MULTIPLIER
+            return entry - atr_value * self.atr_multiplier if direction == "BUY" else entry + atr_value * self.atr_multiplier
         if direction == "BUY":
             low = swing_low(candles, SWING_LOOKBACK)
             return low

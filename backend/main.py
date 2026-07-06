@@ -23,7 +23,17 @@ settings = load_settings()
 db_conn = init_db(settings.db_path)
 
 builders: dict[str, CandleBuilder] = {tf: CandleBuilder(tf) for tf in TIMEFRAMES}
-engines: dict[str, SignalEngine] = {tf: SignalEngine(tf, settings.sl_method) for tf in TIMEFRAMES}
+engines: dict[str, SignalEngine] = {
+    tf: SignalEngine(
+        tf,
+        settings.sl_method,
+        fast_ema_period=settings.fast_ema_period,
+        slow_ema_period=settings.slow_ema_period,
+        atr_multiplier=settings.atr_multiplier,
+        risk_reward=settings.risk_reward,
+    )
+    for tf in TIMEFRAMES
+}
 connected_clients: list[WebSocket] = []
 _event_loop: asyncio.AbstractEventLoop | None = None
 _live_feed_task: asyncio.Task | None = None
@@ -197,6 +207,11 @@ async def broadcast(message: dict) -> None:
             logger.warning("Pruned dead WebSocket client")
 
 
+def _schedule_broadcast(message: dict) -> None:
+    if _event_loop is not None:
+        asyncio.run_coroutine_threadsafe(broadcast(message), _event_loop)
+
+
 def on_index_tick(timestamp: datetime, price: float, futures_price: float, volume: float = 0.0) -> None:
     """Feed one Nifty 50 index tick into every timeframe's candle builder and signal engine.
 
@@ -212,22 +227,27 @@ def on_index_tick(timestamp: datetime, price: float, futures_price: float, volum
     so the sqlite write also happens on the loop thread."""
     for tf in TIMEFRAMES:
         closed = builders[tf].add_tick(timestamp, price, volume)
+        live = builders[tf].candles[-1]
+        _schedule_broadcast({
+            "type": "candle",
+            "timeframe": tf,
+            "candle": _candle_to_json(live),
+        })
         if closed:
             signal = engines[tf].evaluate(builders[tf].candles, futures_price)
             if signal:
                 insert_signal(db_conn, signal)
-                if _event_loop is not None:
-                    asyncio.run_coroutine_threadsafe(broadcast({
-                        "type": "signal",
-                        "timeframe": tf,
-                        "direction": signal.direction,
-                        "timestamp": signal.timestamp.isoformat(),
-                        "entry_index_price": signal.entry_index_price,
-                        "entry_futures_price": signal.entry_futures_price,
-                        "stop_loss": signal.stop_loss,
-                        "target": signal.target,
-                        "rr": signal.rr,
-                    }), _event_loop)
+                _schedule_broadcast({
+                    "type": "signal",
+                    "timeframe": tf,
+                    "direction": signal.direction,
+                    "timestamp": signal.timestamp.isoformat(),
+                    "entry_index_price": signal.entry_index_price,
+                    "entry_futures_price": signal.entry_futures_price,
+                    "stop_loss": signal.stop_loss,
+                    "target": signal.target,
+                    "rr": signal.rr,
+                })
 
 
 app.mount(

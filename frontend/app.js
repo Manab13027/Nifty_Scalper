@@ -73,6 +73,19 @@ ws.onmessage = (event) => {
     state.candlesByTimeframe[message.timeframe] = message.candles;
     state.markersByTimeframe[message.timeframe] = [];
     if (message.timeframe === state.activeTimeframe) renderActiveTimeframe();
+  } else if (message.type === "candle") {
+    const candles = state.candlesByTimeframe[message.timeframe] || [];
+    const last = candles[candles.length - 1];
+    if (last && last.timestamp === message.candle.timestamp) {
+      candles[candles.length - 1] = message.candle;
+    } else {
+      candles.push(message.candle);
+    }
+    state.candlesByTimeframe[message.timeframe] = candles;
+    if (message.timeframe === state.activeTimeframe) {
+      // update() is cheaper than setData() for single-bar changes
+      candleSeries.update(toSeriesData([message.candle])[0]);
+    }
   } else if (message.type === "signal") {
     const marker = {
       time: Math.floor(new Date(message.timestamp).getTime() / 1000),
