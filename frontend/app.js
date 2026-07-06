@@ -89,3 +89,17 @@ ws.onmessage = (event) => {
     beep();
   }
 };
+
+async function pollStatus() {
+  const res = await fetch("/status");
+  const { last_tick_at } = await res.json();
+  const el = document.getElementById("status-indicator");
+  if (!last_tick_at) {
+    el.textContent = "no data yet";
+    return;
+  }
+  const secondsAgo = (Date.now() - new Date(last_tick_at).getTime()) / 1000;
+  el.textContent = secondsAgo > 60 ? `stale (${Math.floor(secondsAgo)}s ago)` : "live";
+}
+setInterval(pollStatus, 5000);
+pollStatus();

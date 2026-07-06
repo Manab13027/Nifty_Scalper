@@ -13,6 +13,7 @@ from backend.candles import CandleBuilder, resample
 from backend.signals import SignalEngine
 from backend.storage import init_db, insert_signal
 from backend.dhan_client import DhanClient, NIFTY_INDEX_SECURITY_ID, NIFTY_INDEX_EXCHANGE_SEGMENT
+from dhanhq import marketfeed
 
 logger = logging.getLogger("nifty_scalper")
 
@@ -25,6 +26,12 @@ builders: dict[str, CandleBuilder] = {tf: CandleBuilder(tf) for tf in TIMEFRAMES
 engines: dict[str, SignalEngine] = {tf: SignalEngine(tf, settings.sl_method) for tf in TIMEFRAMES}
 connected_clients: list[WebSocket] = []
 _event_loop: asyncio.AbstractEventLoop | None = None
+_live_feed_task: asyncio.Task | None = None
+
+_latest_futures_price = {"value": 0.0}
+_last_tick_at: dict[str, datetime | None] = {"value": None}
+
+RECONNECT_BACKOFF_SECONDS = [1, 2, 5, 10, 30]
 
 
 async def backfill() -> None:
@@ -43,12 +50,94 @@ async def backfill() -> None:
         builders[tf].seed(resample(one_min, tf))
 
 
+def _handle_feed_message(message: object) -> None:
+    """Route one parsed feed message into the tick pipeline.
+
+    DhanFeed.process_data() returns a dict for ticker/quote/full packets
+    (keys: "security_id" as int, "LTP" as a formatted string), a plain string
+    for market-status packets, and None for server-disconnection packets
+    (which instead set feed.on_close). Only dict ticker-style payloads with
+    an LTP are actionable here.
+    """
+    if not isinstance(message, dict):
+        return
+    ltp = message.get("LTP")
+    security_id = message.get("security_id")
+    if ltp is None or security_id is None:
+        return
+    price = float(ltp)
+    now = datetime.now()
+    _last_tick_at["value"] = now
+    if str(security_id) == settings.nifty_fut_security_id:
+        _latest_futures_price["value"] = price
+    elif str(security_id) == NIFTY_INDEX_SECURITY_ID:
+        on_index_tick(now, price, _latest_futures_price["value"] or price)
+
+
+async def run_live_feed() -> None:
+    """Consume Dhan's live tick feed and reconnect with backoff on disconnect.
+
+    Runs for the lifetime of the app; market-closed is just a normal no-data
+    state handled by the same backoff loop. The installed dhanhq SDK's
+    DhanFeed is asyncio-native (connect() and get_instrument_data() are
+    coroutines), so we await them directly on the app's event loop instead of
+    using the SDK's blocking run_forever() wrapper. Everything here therefore
+    runs on the event loop thread, and calling on_index_tick() directly
+    satisfies its same-thread sqlite constraint.
+    """
+    if not settings.dhan_client_id or not settings.dhan_access_token:
+        logger.warning("Dhan credentials missing — live feed disabled")
+        return
+    instruments = [(marketfeed.IDX, NIFTY_INDEX_SECURITY_ID, marketfeed.Ticker)]
+    if settings.nifty_fut_security_id:
+        instruments.append((marketfeed.NSE_FNO, settings.nifty_fut_security_id, marketfeed.Ticker))
+    else:
+        logger.warning("NIFTY_FUT_SECURITY_ID not set — using index price as futures reference")
+    attempt = 0
+    while True:
+        feed = None
+        try:
+            feed = marketfeed.DhanFeed(
+                settings.dhan_client_id,
+                settings.dhan_access_token,
+                instruments,
+                version="v2",
+            )
+            await feed.connect()
+            logger.info("Dhan live feed connected")
+            while True:
+                message = await feed.get_instrument_data()
+                if getattr(feed, "on_close", False):
+                    raise ConnectionError("Dhan server requested disconnect")
+                _handle_feed_message(message)
+                attempt = 0
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            delay = RECONNECT_BACKOFF_SECONDS[min(attempt, len(RECONNECT_BACKOFF_SECONDS) - 1)]
+            attempt += 1
+            logger.exception("Live feed error — reconnecting in %ss", delay)
+            await asyncio.sleep(delay)
+        finally:
+            if feed is not None and feed.ws is not None:
+                try:
+                    await feed.ws.close()
+                except Exception:
+                    pass
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    global _event_loop
+    global _event_loop, _live_feed_task
     _event_loop = asyncio.get_running_loop()
     await backfill()
+    _live_feed_task = asyncio.create_task(run_live_feed())
     yield
+    _live_feed_task.cancel()
+    try:
+        await _live_feed_task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(lifespan=lifespan)
@@ -59,6 +148,12 @@ def _candle_to_json(c) -> dict:
         "timestamp": c.timestamp.isoformat(),
         "open": c.open, "high": c.high, "low": c.low, "close": c.close,
     }
+
+
+@app.get("/status")
+async def status() -> dict:
+    last = _last_tick_at["value"]
+    return {"last_tick_at": last.isoformat() if last else None}
 
 
 @app.websocket("/ws")

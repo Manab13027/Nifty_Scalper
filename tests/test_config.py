@@ -13,6 +13,12 @@ def test_load_settings_reads_env(monkeypatch):
     assert settings.db_path == "test.db"
 
 
+def test_load_settings_reads_futures_security_id(monkeypatch):
+    monkeypatch.setenv("NIFTY_FUT_SECURITY_ID", "55555")
+    settings = load_settings()
+    assert settings.nifty_fut_security_id == "55555"
+
+
 def test_load_settings_defaults(monkeypatch):
     monkeypatch.delenv("SL_METHOD", raising=False)
     monkeypatch.delenv("DB_PATH", raising=False)
