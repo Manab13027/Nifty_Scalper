@@ -1,7 +1,8 @@
 const chartEl = document.getElementById("chart");
 const chart = LightweightCharts.createChart(chartEl, {
-  height: window.innerHeight,
+  autoSize: true,
   layout: { background: { color: "#fff" }, textColor: "#000" },
+  timeScale: { timeVisible: true },
 });
 const candleSeries = chart.addCandlestickSeries();
 
@@ -11,6 +12,7 @@ const state = {
   markersByTimeframe: {},
 };
 
+// Backend sends naive local-time ISO strings; new Date() parses them as local time, which is correct for this same-machine tool. Don't append "Z".
 function toSeriesData(candles) {
   return candles.map((c) => ({
     time: Math.floor(new Date(c.timestamp).getTime() / 1000),
@@ -36,13 +38,18 @@ document.querySelectorAll(".tab-btn").forEach((btn) => {
   });
 });
 
+let audioCtx;
 function beep() {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
-  const osc = ctx.createOscillator();
+  audioCtx ??= new (window.AudioContext || window.webkitAudioContext)();
+  audioCtx.resume();
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  gain.gain.value = 0.3;
   osc.frequency.value = 880;
-  osc.connect(ctx.destination);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
   osc.start();
-  osc.stop(ctx.currentTime + 0.15);
+  osc.stop(audioCtx.currentTime + 0.15);
 }
 
 function addSignalToPanel(signal) {
@@ -54,6 +61,11 @@ function addSignalToPanel(signal) {
 }
 
 const ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+ws.onclose = () => {
+  document.title = "⚠ DISCONNECTED — Nifty Scalper";
+  document.body.style.opacity = "0.5";
+};
 
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
