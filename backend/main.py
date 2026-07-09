@@ -5,11 +5,12 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 
+from backend.backtest import run_backtest
 from backend.config import load_settings
-from backend.candles import CandleBuilder, resample
+from backend.candles import CandleBuilder, resample, TIMEFRAME_SECONDS
 from backend.indicators import ema, session_vwap
 from backend.signals import SignalEngine
 from backend.storage import init_db, insert_signal, get_recent_signals
@@ -189,6 +190,67 @@ async def status() -> dict:
 @app.get("/signals")
 async def recent_signals() -> list[dict]:
     return get_recent_signals(db_conn)
+
+
+@app.get("/backtest")
+async def backtest_endpoint(
+    from_date: str = Query(..., description="YYYY-MM-DD"),
+    to_date: str = Query(..., description="YYYY-MM-DD"),
+    timeframe: str = Query("15m"),
+) -> dict:
+    """Fetch historical Nifty index candles for the range, replay the strategy
+    over them, and return simulated trades + stats. Uses the same strategy
+    parameters (.env) as the live engines."""
+    if timeframe not in TIMEFRAME_SECONDS:
+        raise HTTPException(status_code=400, detail=f"Unsupported timeframe: {timeframe}")
+    client = DhanClient(settings.dhan_client_id, settings.dhan_access_token)
+    try:
+        # dhanhq's fetch is synchronous (requests) — run off the event loop
+        one_min = await asyncio.to_thread(
+            client.fetch_intraday_candles,
+            NIFTY_INDEX_SECURITY_ID, NIFTY_INDEX_EXCHANGE_SEGMENT, "INDEX", from_date, to_date,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Dhan historical fetch failed: {exc}")
+    candles = one_min if timeframe == "1m" else resample(one_min, timeframe)
+    result = run_backtest(
+        candles,
+        timeframe,
+        sl_method=settings.sl_method,
+        fast_ema_period=settings.fast_ema_period,
+        slow_ema_period=settings.slow_ema_period,
+        atr_multiplier=settings.atr_multiplier,
+        risk_reward=settings.risk_reward,
+    )
+    return {
+        "timeframe": timeframe,
+        "from_date": from_date,
+        "to_date": to_date,
+        "stats": {
+            "total_signals": result.total_signals,
+            "trades": len(result.trades),
+            "wins": result.wins,
+            "losses": result.losses,
+            "open": sum(1 for t in result.trades if t.outcome == "open"),
+            "win_rate": result.win_rate,
+            "total_r": result.total_r,
+        },
+        "trades": [
+            {
+                "direction": t.direction,
+                "entry_time": t.entry_time.isoformat(),
+                "entry_price": t.entry_price,
+                "stop_loss": t.signal_stop_loss,
+                "target": t.signal_target,
+                "outcome": t.outcome,
+                "r_multiple": t.r_multiple,
+                "exit_time": t.exit_time.isoformat() if t.exit_time else None,
+                "exit_price": t.exit_price,
+            }
+            for t in result.trades
+        ],
+        "candles": [_candle_to_json(c) for c in candles],
+    }
 
 
 @app.websocket("/ws")

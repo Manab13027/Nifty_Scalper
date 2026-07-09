@@ -91,9 +91,20 @@ Web Dashboard (browser, lightweight-charts)
   candle sequences producing expected BUY/SELL/no-signal outcomes.
 - Unit tests for SL/target math under both `atr` and `swing` modes.
 
+## Backtesting (added 2026-07-09)
+
+- Dashboard "Backtest" tab: date range + timeframe pickers; runs the same
+  strategy (same `.env` parameters) over Dhan historical data via
+  `GET /backtest`.
+- Trade simulation: entry at signal close; walk forward candle by candle,
+  SL or target hit — whichever first; a candle touching both counts as a
+  loss (conservative). One position at a time; further signals while open
+  are counted but not taken. Trades unresolved at data end reported "open".
+- Results in R-multiples (win = +RR, loss = −1; no slippage modeling) with
+  win rate, totals, and entry/exit markers plotted on the chart.
+
 ## Out of Scope (for this spec)
 
 - Order execution (live or paper).
 - Multi-instrument support beyond Nifty index + Nifty futures.
 - Alerting beyond on-screen arrows + browser beep (no Telegram/SMS/email).
-- Backtesting UI (may be a future spec).

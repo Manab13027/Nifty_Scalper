@@ -12,10 +12,24 @@
     <button class="tab-btn" data-tf="15m">15m</button>
     <button class="tab-btn" data-tf="1h">1h</button>
     <button class="tab-btn" data-tf="day">Day</button>
+    <button class="tab-btn" id="backtest-tab">Backtest</button>
     <span id="status-indicator">no data yet</span>
+  </div>
+  <div id="backtest-bar" hidden>
+    <label>From <input type="date" id="bt-from" /></label>
+    <label>To <input type="date" id="bt-to" /></label>
+    <select id="bt-timeframe">
+      <option value="1m">1m</option>
+      <option value="15m" selected>15m</option>
+      <option value="1h">1h</option>
+      <option value="day">Day</option>
+    </select>
+    <button id="bt-run">Run</button>
+    <span id="bt-status"></span>
   </div>
   <div id="chart"></div>
   <aside id="signal-panel">
+    <div id="backtest-stats" hidden></div>
     <h2>Recent Signals</h2>
     <ul id="signal-list"></ul>
   </aside>

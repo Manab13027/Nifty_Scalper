@@ -14,6 +14,8 @@ const state = {
   candlesByTimeframe: {},
   markersByTimeframe: {},
   indicatorsByTimeframe: {},
+  mode: "live", // "live" | "backtest"
+  backtest: null, // last /backtest response
 };
 
 // Backend sends naive local-time ISO strings; new Date() parses them as local time, which is correct for this same-machine tool. Don't append "Z".
@@ -47,11 +49,14 @@ function renderActiveTimeframe() {
   vwapSeries.setData(toLineData(candles, indicators.vwap));
 }
 
-document.querySelectorAll(".tab-btn").forEach((btn) => {
+document.querySelectorAll(".tab-btn[data-tf]").forEach((btn) => {
   btn.addEventListener("click", () => {
     document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
     btn.classList.add("active");
+    state.mode = "live";
     state.activeTimeframe = btn.dataset.tf;
+    document.getElementById("backtest-bar").hidden = true;
+    document.getElementById("backtest-stats").hidden = true;
     renderActiveTimeframe();
   });
 });
@@ -87,11 +92,12 @@ ws.onclose = () => {
 
 ws.onmessage = (event) => {
   const message = JSON.parse(event.data);
+  const isVisible = (tf) => state.mode === "live" && tf === state.activeTimeframe;
   if (message.type === "history") {
     state.candlesByTimeframe[message.timeframe] = message.candles;
     state.markersByTimeframe[message.timeframe] = [];
     state.indicatorsByTimeframe[message.timeframe] = message.indicators || { ema_fast: [], ema_slow: [], vwap: [] };
-    if (message.timeframe === state.activeTimeframe) renderActiveTimeframe();
+    if (isVisible(message.timeframe)) renderActiveTimeframe();
   } else if (message.type === "candle") {
     const candles = state.candlesByTimeframe[message.timeframe] || [];
     const last = candles[candles.length - 1];
@@ -114,7 +120,7 @@ ws.onmessage = (event) => {
         }
       }
     }
-    if (message.timeframe === state.activeTimeframe) {
+    if (isVisible(message.timeframe)) {
       // update() is cheaper than setData() for single-bar changes
       candleSeries.update(toSeriesData([message.candle])[0]);
       if (message.indicators) {
@@ -135,7 +141,7 @@ ws.onmessage = (event) => {
     const markers = state.markersByTimeframe[message.timeframe] || [];
     markers.push(marker);
     state.markersByTimeframe[message.timeframe] = markers;
-    if (message.timeframe === state.activeTimeframe) renderActiveTimeframe();
+    if (isVisible(message.timeframe)) renderActiveTimeframe();
     addSignalToPanel(message);
     beep();
   }
@@ -173,3 +179,116 @@ async function loadRecentSignals() {
   }
 }
 loadRecentSignals();
+
+// ---- Backtest mode ----
+
+const backtestTab = document.getElementById("backtest-tab");
+const backtestBar = document.getElementById("backtest-bar");
+const backtestStatsEl = document.getElementById("backtest-stats");
+const btStatus = document.getElementById("bt-status");
+
+backtestTab.addEventListener("click", () => {
+  document.querySelectorAll(".tab-btn").forEach((b) => b.classList.remove("active"));
+  backtestTab.classList.add("active");
+  state.mode = "backtest";
+  backtestBar.hidden = false;
+  if (state.backtest) {
+    renderBacktest(state.backtest);
+  }
+});
+
+function toTime(iso) {
+  return Math.floor(new Date(iso).getTime() / 1000);
+}
+
+function backtestMarkers(trades) {
+  const markers = [];
+  for (const t of trades) {
+    markers.push({
+      time: toTime(t.entry_time),
+      position: t.direction === "BUY" ? "belowBar" : "aboveBar",
+      color: t.direction === "BUY" ? "#16a34a" : "#dc2626",
+      shape: t.direction === "BUY" ? "arrowUp" : "arrowDown",
+      text: `${t.direction} SL ${t.stop_loss.toFixed(0)} / TG ${t.target.toFixed(0)}`,
+    });
+    if (t.exit_time) {
+      const won = t.outcome === "win";
+      markers.push({
+        time: toTime(t.exit_time),
+        position: "aboveBar",
+        color: won ? "#16a34a" : "#dc2626",
+        shape: "circle",
+        text: won ? `WIN +${t.r_multiple}R` : `LOSS ${t.r_multiple}R`,
+      });
+    }
+  }
+  // lightweight-charts requires markers sorted by time
+  markers.sort((a, b) => a.time - b.time);
+  return markers;
+}
+
+function renderBacktest(bt) {
+  candleSeries.setData(toSeriesData(bt.candles));
+  candleSeries.setMarkers(backtestMarkers(bt.trades));
+  // Overlays reflect live indicator state, not the backtest range — clear them.
+  emaFastSeries.setData([]);
+  emaSlowSeries.setData([]);
+  vwapSeries.setData([]);
+  chart.timeScale().fitContent();
+
+  const s = bt.stats;
+  backtestStatsEl.hidden = false;
+  backtestStatsEl.replaceChildren();
+  const title = document.createElement("strong");
+  title.textContent = `Backtest ${bt.from_date} → ${bt.to_date} (${bt.timeframe})`;
+  backtestStatsEl.appendChild(title);
+  const lines = [
+    `Signals: ${s.total_signals} | Trades taken: ${s.trades}`,
+    `Wins: ${s.wins} | Losses: ${s.losses} | Open: ${s.open}`,
+    `Win rate: ${s.win_rate == null ? "n/a" : (s.win_rate * 100).toFixed(1) + "%"}`,
+  ];
+  for (const text of lines) {
+    const div = document.createElement("div");
+    div.textContent = text;
+    backtestStatsEl.appendChild(div);
+  }
+  const totalR = document.createElement("div");
+  const rSpan = document.createElement("span");
+  rSpan.className = s.total_r >= 0 ? "stat-good" : "stat-bad";
+  rSpan.textContent = `${s.total_r >= 0 ? "+" : ""}${s.total_r.toFixed(1)}R`;
+  totalR.append("Net result: ", rSpan);
+  backtestStatsEl.appendChild(totalR);
+}
+
+document.getElementById("bt-run").addEventListener("click", async () => {
+  const from = document.getElementById("bt-from").value;
+  const to = document.getElementById("bt-to").value;
+  const timeframe = document.getElementById("bt-timeframe").value;
+  if (!from || !to) {
+    btStatus.textContent = "pick both dates";
+    return;
+  }
+  btStatus.textContent = "running…";
+  try {
+    const res = await fetch(`/backtest?from_date=${from}&to_date=${to}&timeframe=${timeframe}`);
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      btStatus.textContent = err.detail || `error ${res.status}`;
+      return;
+    }
+    state.backtest = await res.json();
+    btStatus.textContent = `${state.backtest.candles.length} candles`;
+    renderBacktest(state.backtest);
+  } catch {
+    btStatus.textContent = "request failed";
+  }
+});
+
+// Default the date pickers to the last 5 days.
+(() => {
+  const today = new Date();
+  const past = new Date(today.getTime() - 5 * 86400000);
+  const fmt = (d) => d.toISOString().slice(0, 10);
+  document.getElementById("bt-to").value = fmt(today);
+  document.getElementById("bt-from").value = fmt(past);
+})();
