@@ -12,6 +12,8 @@ def test_ws_sends_history_frames_on_connect(monkeypatch, tmp_path):
     # so set the env var and force a fresh import to guarantee it takes effect
     # (another test in the session may have already imported the module).
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    # Skip scrip-master auto-resolution in tests (it downloads ~10 MB).
+    monkeypatch.setenv("NIFTY_FUT_SECURITY_ID", "12345")
     sys.modules.pop("backend.main", None)
     main = importlib.import_module("backend.main")
 
@@ -34,6 +36,8 @@ def test_ws_sends_history_frames_on_connect(monkeypatch, tmp_path):
 
 def test_backtest_endpoint_runs_strategy_over_fetched_range(monkeypatch, tmp_path):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    # Skip scrip-master auto-resolution in tests (it downloads ~10 MB).
+    monkeypatch.setenv("NIFTY_FUT_SECURITY_ID", "12345")
     sys.modules.pop("backend.main", None)
     main = importlib.import_module("backend.main")
 
@@ -69,6 +73,8 @@ def test_backtest_endpoint_runs_strategy_over_fetched_range(monkeypatch, tmp_pat
 
 def test_backtest_endpoint_rejects_bad_timeframe(monkeypatch, tmp_path):
     monkeypatch.setenv("DB_PATH", str(tmp_path / "test.db"))
+    # Skip scrip-master auto-resolution in tests (it downloads ~10 MB).
+    monkeypatch.setenv("NIFTY_FUT_SECURITY_ID", "12345")
     sys.modules.pop("backend.main", None)
     main = importlib.import_module("backend.main")
 

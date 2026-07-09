@@ -14,9 +14,15 @@ from backend.candles import CandleBuilder, resample, TIMEFRAME_SECONDS
 from backend.indicators import ema, session_vwap
 from backend.signals import SignalEngine
 from backend.storage import init_db, insert_signal, get_recent_signals
-from backend.dhan_client import DhanClient, NIFTY_INDEX_SECURITY_ID, NIFTY_INDEX_EXCHANGE_SEGMENT
+from backend.dhan_client import (
+    DhanClient,
+    NIFTY_INDEX_SECURITY_ID,
+    NIFTY_INDEX_EXCHANGE_SEGMENT,
+    resolve_nifty_fut_security_id,
+)
 from dhanhq import marketfeed
 
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger("nifty_scalper")
 
 TIMEFRAMES = ["1m", "15m", "1h", "day"]
@@ -150,6 +156,22 @@ async def run_live_feed() -> None:
 async def lifespan(app: FastAPI):
     global _event_loop, _live_feed_task
     _event_loop = asyncio.get_running_loop()
+    if not settings.nifty_fut_security_id:
+        # .env override wins; otherwise resolve the current-month contract from
+        # Dhan's public scrip master so expiry rollover needs no manual edit.
+        try:
+            resolved = await asyncio.to_thread(resolve_nifty_fut_security_id)
+        except Exception:
+            logger.exception("Scrip master download failed")
+            resolved = None
+        if resolved:
+            settings.nifty_fut_security_id = resolved
+            logger.info("Auto-resolved NIFTY futures security_id: %s", resolved)
+        else:
+            logger.warning(
+                "Could not auto-resolve NIFTY futures security_id — "
+                "using index price as futures reference"
+            )
     await backfill()
     _live_feed_task = asyncio.create_task(run_live_feed())
     yield
